@@ -1,0 +1,173 @@
+#! /bin/bash
+#
+#
+
+CONTAINER='[flywheel/bxh-xcede-tools-qa]'
+echo -e "$CONTAINER  Running..."
+
+##############################################################################
+# Configure paths
+
+FLYWHEEL_BASE=/flywheel/v0
+OUTPUT_DIR=$FLYWHEEL_BASE/output
+INPUT_DIR=$FLYWHEEL_BASE/input/fmri_input
+CONFIG_FILE=$FLYWHEEL_BASE/config.json
+
+# Configure PATH
+export PATH=$PATH:/opt/bxh_xcede_tools-1.11.14-lsb30.x86_64/bin
+source /etc/afni/afni.sh
+
+##############################################################################
+# Parse configuration
+
+function parse_config {
+
+  CONFIG_FILE=$FLYWHEEL_BASE/config.json
+  MANIFEST_FILE=$FLYWHEEL_BASE/manifest.json
+
+  if [[ -f $CONFIG_FILE ]]; then
+    echo "$(cat $CONFIG_FILE | jq -r '.config.'$1)"
+  else
+    CONFIG_FILE=$MANIFEST_FILE
+    echo "$(cat $MANIFEST_FILE | jq -r '.config.'$1'.default')"
+  fi
+}
+
+config_birn_phantom="$(parse_config 'birn_phantom')"
+config_save_qa_stats="$(parse_config 'save_qa_stats')"
+config_save_zip="$(parse_config 'save_zip')"
+
+##############################################################################
+# Handle INPUT.
+
+# The input to this Gear can be either a zip, a tgz, or a mounted volume
+# containing DICOMs. Below we handle all those cases.
+
+input_file=$(find $INPUT_DIR/* -not -path '*/\.*' -type f | head -1)
+fmri_input=''
+
+if [[ -z "$input_file" ]] ; then
+  echo -e "$CONTAINER No input file was found!"
+  exit 1
+fi
+
+# Prepare inputs: unzip, gunzip, or uncompressed
+if [[ "$input_file" == *.zip ]] ; then
+
+  echo "$CONTAINER  Unzipping $input_file"
+  unzip -q "$input_file" -d $INPUT_DIR
+
+  # Find unzipped directory in input dir
+  fmri_input=$(find $INPUT_DIR/* -not -path '*/\.*' -type d | head -1)
+
+  # Zip bomb: Set fmri_input to INPUT_DIR
+  if [[ -z "$fmri_input" ]]; then
+    fmri_input=$INPUT_DIR
+  fi
+
+elif [[ "$input_file" == *.nii* ]]; then
+  fmri_input="${input_file}"
+
+elif [[ "$input_file" == *.tgz ]]; then
+  cd $INPUT_DIR
+  echo "$CONTAINER  Gunzipping $input_file"
+  gunzip -q "$input_file"
+  fmri_input=$(basename "$input_file" .gz)
+
+else
+  # Assume a directory containing DICOMs was mounted in and pass it on (local docker execution)
+  fmri_input=$INPUT_DIR
+fi
+
+
+##############################################################################
+# Sanitize fmri_input name
+
+# Remove '.dicom' from fmri_input (if it's a directory) for output filename.
+# Otherwise with default behavior (including the input folder in the output
+# filename) we have a '.dicom.nii.gz' extension, which is silly.
+
+if [[ -d "$fmri_input" ]]; then
+  NEW_DIR=$(dirname "$fmri_input")/$(basename "$fmri_input" .dicom)
+  if [[ "$fmri_input" != "$NEW_DIR" ]]; then
+    mv "$fmri_input" "$NEW_DIR"
+    fmri_input="$NEW_DIR"
+  fi
+fi
+
+##############################################################################
+# Run the algorithm
+
+# Convert the input file to bxh format
+echo "$CONTAINER  Converting INPUT files..."
+bxh_out="$INPUT_DIR"/$(basename "$fmri_input").bxh
+if [[ "$fmri_input" == *.nii* ]] ; then
+  analyze2bxh "${fmri_input}" "${bxh_out}"
+else
+  dicom2bxh "$fmri_input"/* "$bxh_out"
+fi
+bxh_convert_exit_code=$?
+
+# On successful conversion, run the fmriqa algorithm
+if [[ $bxh_convert_exit_code == 0 ]]; then
+
+  # Run the BIRN Phantom QA
+  if [[ $config_birn_phantom == 'true' ]]; then
+    echo "$CONTAINER  Running BIRN PHANTOM QA..."
+    fmriqa_output=$OUTPUT_DIR/fmriqa
+    fmriqa_phantomqa.pl "$bxh_out" "$fmriqa_output"
+
+  # Run the Human fMRI QA
+  else
+    echo "$CONTAINER  Running fMRI QA..."
+    fmriqa_output=$OUTPUT_DIR/fmriqa
+    fmriqa_phantomqa.pl "$bxh_out" "$fmriqa_output"
+  fi
+
+  # Upon success, convert index, zip output and exit
+  if [[ $? == 0 ]]; then
+
+    # Convert index to standalone index
+    echo "$CONTAINER  generating output html..."
+    output_html_file="${OUTPUT_DIR}"/`basename "$fmri_input"`_fmriqa.qa.html
+    python /opt/webpage2html/webpage2html.py -q -s "$fmriqa_output"/index.html > "$output_html_file"
+
+    ## Preserve qa json outputs
+    echo "$CONTAINER  Saving qa_stats output..."
+    cp "$fmriqa_output"/json/qa_stats*.json $OUTPUT_DIR/$(basename $fmri_input)_qa_stats.qa.json
+    cp "$fmriqa_output"/json/qa_scalarstats*.json $OUTPUT_DIR/$(basename $fmri_input)_qa_scalarstats.qa.json
+    cp "$fmriqa_output"/json/qa_imagerefs*.json $OUTPUT_DIR/qa_imagerefs_$(basename $fmri_input)_qa_imagerefs.qa.json
+
+    echo "$CONTAINER  Compressing outputs..."
+    #Create a zip archive from the output 
+    cd ${OUTPUT_DIR}
+    zip -r -q ${OUTPUT_DIR}/$(basename "$fmri_input")_fmriqa.zip $(basename "$fmriqa_output")
+    cd ${OUTPUT_DIR}
+
+    ### Generate metadata.json
+    qa_file=$(find "$fmriqa_output"/json/* -name "qa_scalarstats*.json")
+    if [[ -f "${qa_file}" ]]; then
+      echo -e "$CONTAINER  generating file info from ${qa_file}"
+      $FLYWHEEL_BASE/stat_metadata.py "${config_file}" "${qa_file}"
+    else
+      echo -e "$CONTAINER  no QA stats file could be found! Not generating file info."
+    fi
+
+    # Clean up
+    rm -rf "$fmriqa_output"
+    echo "$CONTAINER  Done!"
+    exit 0
+
+  # QA failed, exit.
+  else
+    echo "$CONTAINER  fmriqa failed to run!"
+    exit 1
+  fi
+
+# dicom2bxh DICOM conversion failed, exit.
+else
+  echo "$CONTAINER  dicom2bxh failed to convert DICOM files!"
+  exit 1
+fi
+
+exit 0

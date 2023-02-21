@@ -1,0 +1,39 @@
+{
+  "name": "bxh-xcede-tools-qa",
+  "label": "BXH-XCEDE-TOOLS: fMRI QA (v1.11.14)",
+  "description": "Uses the NITRC BXH/XCEDE Tools to gather QA data, both fmriqa_phantomqa.pl and fmriqa_generate.pl show an HTML page with images, graphs, and other data. fmriqa_phantomqa.pl is used for the BIRN stability phantom and is the default use for this container",
+  "author": "Syam Gadde <gadde@biac.duke.edu>",
+  "url": "https://www.nitrc.org/projects/bxh_xcede_tools/",
+  "license": "Other",
+  "flywheel": "0",
+  "version": "1.0",
+  "config": {
+    "birn_phantom": {
+      "description": "This determines if the Phantom QA algorithm (fmriqa_phantomqa.pl) should be run instead of the default Human fMRI QA algorithm (fmriqa_generate.pl). [Default=true]",
+      "type": "boolean",
+      "default": true
+    },
+    "save_qa_stats": {
+      "description": "Save qa_stats.json files, which contains qa measures featured in the HTML output report. [Default=false]",
+      "type": "boolean",
+      "default": false
+    },
+    "save_zip": {
+      "description": "Save all outputs in a zip archive. [Default=true]",
+      "type": "boolean",
+      "default": true
+    }
+  },
+  "inputs": {
+    "fmri_input": {
+      "description": "fMRI input file for bxh-xcede-tools-qa. This should be a folder of DICOM files.",
+      "base": "file",
+      "type": {
+        "enum": [
+          "dicom",
+          "nifti"
+        ]
+      }
+    }
+  }
+}
