@@ -13,8 +13,6 @@ import XNATProject
 import os
 
 # Pipeline scheduling pathnames
-outputFolder = "/localdata/scheduler/output/"
-singularityInput = '/localdata/scheduler/pipelines/sources/bxh-xcede-tools-qa/'
 finalOutput = '/localdata/scheduler/output/'
 
 # Location to save output after pipeline has run
