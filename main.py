@@ -16,7 +16,7 @@ import os
 finalOutput = '/localdata/scheduler/output/'
 
 # Location to save output after pipeline has run
-# USED LINE 101 FOR SCP
+# USED LINE 98 FOR SCP
 SERVER_OUTPUT = ''
 
 # Variables that are updated by scan
